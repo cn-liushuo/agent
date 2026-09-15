@@ -1,0 +1,36 @@
+name: Multi-Platform Sync
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mirror to Gitee & GitCode
+        run: |
+          # 1. 配置 Git 用户信息
+          git config --global user.email "liushuo.fe@gmail.com"
+          git config --global user.name "ls"
+
+          # 2. 配置并启动本地虚拟主机的 SSH 密钥
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SYNC_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          # 3. 信任 Gitee 与 GitCode 的服务器指纹
+          ssh-keyscan -H gitee.com >> ~/.ssh/known_hosts
+          ssh-keyscan -H gitcode.com >> ~/.ssh/known_hosts
+
+          # 4. 强行推送到 Gitee
+          git push --prune git@gitee.com:liushuo_fe/agent.git +refs/remotes/origin/*:refs/heads/* +refs/tags/*:refs/tags/*
+
+          # 5. 强行推送到 GitCode
+          git push --prune git@gitcode.com:liushuo_fe/agent.git +refs/remotes/origin/*:refs/heads/* +refs/tags/*:refs/tags/*
