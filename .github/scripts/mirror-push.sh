@@ -3,37 +3,49 @@
 # 从最早提交起每批固定数量推进，支持从远端已有 tip 续传；最后对齐其余分支与 tags。
 set -euo pipefail
 
-REMOTE_URL="${1:?用法: mirror-push.sh <ssh-git-url>}"
+# 强制行缓冲，Actions 非 TTY 下日志也能实时刷出
+if [ -z "${MIRROR_PUSH_LINEBUF:-}" ] && command -v stdbuf >/dev/null 2>&1; then
+  export MIRROR_PUSH_LINEBUF=1
+  exec stdbuf -oL -eL "$0" "$@"
+fi
+
+REMOTE_URL="${1:?用法: mirror-push.sh <ssh-remote-url>}"
 BATCH_SIZE="${BATCH_SIZE:-5}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-5}"
+
+# 带时间戳打印，便于在 Actions 里对照进度
+log() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
 
 # 带退避的 git push，应对 Broken pipe / hung up；参数原样传给 git push
 push_with_retry() {
   local attempt=1
   while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
-    echo ">>> Push attempt ${attempt}/${MAX_ATTEMPTS}: $*"
-    if git push "${REMOTE_URL}" "$@"; then
-      echo ">>> Push ok: $*"
+    log ">>> Push attempt ${attempt}/${MAX_ATTEMPTS}: $*"
+    # --progress：非 TTY 也输出传输进度，避免长时间无日志
+    if git push --progress "${REMOTE_URL}" "$@"; then
+      log ">>> Push ok: $*"
       return 0
     fi
     if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
-      echo ">>> Push failed after ${MAX_ATTEMPTS} attempts: $*"
+      log ">>> Push failed after ${MAX_ATTEMPTS} attempts: $*"
       return 1
     fi
     local sleep_seconds=$((attempt * 30))
-    echo ">>> Interrupted, retry in ${sleep_seconds}s..."
+    log ">>> Interrupted, retry in ${sleep_seconds}s..."
     sleep "${sleep_seconds}"
     attempt=$((attempt + 1))
   done
 }
 
-# 单分支：从 origin/<branch> 历史起点按 BATCH_SIZE 个 commit 推进到 tip
+# 单分支：从 origin/ 历史起点按 BATCH_SIZE 个 commit 推进到 tip
 sync_branch_by_commits() {
   local branch="$1"
   local local_ref="refs/remotes/origin/${branch}"
 
   if ! git show-ref --verify --quiet "${local_ref}"; then
-    echo ">>> Skip missing branch: ${branch}"
+    log ">>> Skip missing branch: ${branch}"
     return 0
   fi
 
@@ -45,7 +57,7 @@ sync_branch_by_commits() {
   mapfile -t commits < <(git rev-list --reverse "${local_ref}")
   local total="${#commits[@]}"
   if [ "${total}" -eq 0 ]; then
-    echo ">>> Empty history: ${branch}"
+    log ">>> Empty history: ${branch}"
     return 0
   fi
 
@@ -55,7 +67,7 @@ sync_branch_by_commits() {
   local start=0
   if [ -n "${remote_sha}" ]; then
     if [ "${remote_sha}" = "${tip}" ]; then
-      echo ">>> Branch ${branch} already up to date (${tip})"
+      log ">>> Branch ${branch} already up to date (${tip})"
       return 0
     fi
 
@@ -71,15 +83,17 @@ sync_branch_by_commits() {
 
     # 远端 tip 不在本地历史：强制一次对齐（少见，例如误推）
     if [ "${found}" -eq 0 ]; then
-      echo ">>> Remote ${branch} tip not in local history, force align tip"
+      log ">>> Remote ${branch} tip not in local history, force align tip"
       push_with_retry "+${tip}:refs/heads/${branch}"
       return 0
     fi
   fi
 
-  echo ">>> Sync ${branch}: total=${total}, resume_index=${start}, batch=${BATCH_SIZE}"
+  local remaining=$((total - start))
+  local batches=$(( (remaining + BATCH_SIZE - 1) / BATCH_SIZE ))
+  log ">>> Sync ${branch}: total=${total}, resume_index=${start}, remaining=${remaining}, batches≈${batches}, batch=${BATCH_SIZE}"
 
-  local end sha
+  local end sha batch_no=0
   local i
   for ((i = start; i < total; i += BATCH_SIZE)); do
     end=$((i + BATCH_SIZE - 1))
@@ -87,12 +101,13 @@ sync_branch_by_commits() {
       end=$((total - 1))
     fi
     sha="${commits[$end]}"
-    echo ">>> ${branch} commits $((i + 1))-$((end + 1))/${total} -> ${sha}"
+    batch_no=$((batch_no + 1))
+    log ">>> ${branch} batch ${batch_no}/${batches}: commits $((i + 1))-$((end + 1))/${total} -> ${sha}"
     push_with_retry "${sha}:refs/heads/${branch}"
   done
 }
 
-echo ">>> Mirror start -> ${REMOTE_URL} (batch=${BATCH_SIZE})"
+log ">>> Mirror start -> ${REMOTE_URL} (batch=${BATCH_SIZE})"
 
 # 同步 origin 下全部分支（含 main/master）
 mapfile -t branches < <(
@@ -102,9 +117,11 @@ mapfile -t branches < <(
 )
 
 if [ "${#branches[@]}" -eq 0 ]; then
-  echo ">>> No origin branches found"
+  log ">>> No origin branches found"
   exit 1
 fi
+
+log ">>> Branches to sync: ${branches[*]}"
 
 for branch in "${branches[@]}"; do
   sync_branch_by_commits "${branch}"
@@ -112,14 +129,14 @@ done
 
 # tags：对象多已随分支到位，单独对齐引用
 if [ -n "$(git tag -l)" ]; then
-  echo ">>> Sync tags"
+  log ">>> Sync tags"
   push_with_retry --tags
 else
-  echo ">>> No tags to sync"
+  log ">>> No tags to sync"
 fi
 
 # 清理远端多余分支（与 origin 对齐）；对象已齐时通常很快
-echo ">>> Prune remote branches to match origin"
+log ">>> Prune remote branches to match origin"
 push_with_retry --prune "+refs/remotes/origin/*:refs/heads/*"
 
-echo ">>> Mirror done -> ${REMOTE_URL}"
+log ">>> Mirror done -> ${REMOTE_URL}"

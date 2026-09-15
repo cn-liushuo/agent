@@ -53,11 +53,14 @@ jobs:
         id: mirror_gitee
         env:
           BATCH_SIZE: "5"
-        run: .github/scripts/mirror-push.sh "git@gitee.com:liushuo_fe/agent.git"
+          # 关闭 git 进度节流，配合脚本内 --progress 实时刷日志
+          GIT_PROGRESS_DELAY: "0"
+        run: stdbuf -oL -eL .github/scripts/mirror-push.sh "git@gitee.com:liushuo_fe/agent.git"
 
       - name: Mirror to GitCode
         # SSH 就绪后即使 Gitee 失败也继续推 GitCode
         if: steps.setup_ssh.outcome == 'success'
         env:
           BATCH_SIZE: "5"
-        run: .github/scripts/mirror-push.sh "git@gitcode.com:liushuo_fe/agent.git"
+          GIT_PROGRESS_DELAY: "0"
+        run: stdbuf -oL -eL .github/scripts/mirror-push.sh "git@gitcode.com:liushuo_fe/agent.git"
