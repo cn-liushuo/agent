@@ -4,10 +4,14 @@ on:
   push:
     branches:
       - main
+  # 长历史分批未跑完时可手动再触发，会从远端已有 tip 续传
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    # 大仓分批推送可能较久，放宽单 job 上限
+    timeout-minutes: 360
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,7 +21,6 @@ jobs:
       - name: Setup SSH for mirror push
         id: setup_ssh
         run: |
-          # 配置 Git 用户信息（仅用于本次 runner，不影响业务提交作者）
           git config --global user.email "liushuo.fe@gmail.com"
           git config --global user.name "ls"
 
@@ -28,7 +31,7 @@ jobs:
           printf '%s\n' "${{ secrets.SYNC_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
 
-          # 长连接保活：首次全量与后续增量推送都依赖此配置，防止中途 Broken pipe
+          # 长连接保活，降低分批推送过程中 Broken pipe 概率
           cat > ~/.ssh/config <<'EOF'
           Host gitee.com gitcode.com
             IdentityFile ~/.ssh/id_ed25519
@@ -37,7 +40,6 @@ jobs:
             ServerAliveCountMax 120
             TCPKeepAlive yes
           EOF
-          # 去掉因 YAML 缩进带入的行首空格，保证 ssh config 语法合法
           sed -i 's/^[[:space:]]*//' ~/.ssh/config
           chmod 600 ~/.ssh/config
 
@@ -45,39 +47,17 @@ jobs:
           ssh-keyscan -H gitcode.com >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
-          # 推送失败时自动重试：远端已收到的对象可复用，适合首次大包与偶发断线
-          cat > /tmp/push_with_retry.sh <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          remote_url="$1"
-          max_attempts=5
-          attempt=1
-          while [ "$attempt" -le "$max_attempts" ]; do
-            echo ">>> Push attempt ${attempt}/${max_attempts} -> ${remote_url}"
-            if git push --prune "${remote_url}" \
-              +refs/remotes/origin/*:refs/heads/* \
-              +refs/tags/*:refs/tags/*; then
-              echo ">>> Push succeeded -> ${remote_url}"
-              exit 0
-            fi
-            if [ "$attempt" -eq "$max_attempts" ]; then
-              echo ">>> Push failed after ${max_attempts} attempts -> ${remote_url}"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 30))
-            echo ">>> Push interrupted, retry in ${sleep_seconds}s..."
-            sleep "$sleep_seconds"
-            attempt=$((attempt + 1))
-          done
-          EOF
-          sed -i 's/^[[:space:]]*//' /tmp/push_with_retry.sh
-          chmod +x /tmp/push_with_retry.sh
+          chmod +x .github/scripts/mirror-push.sh
 
       - name: Mirror to Gitee
         id: mirror_gitee
-        run: /tmp/push_with_retry.sh "git@gitee.com:liushuo_fe/agent.git"
+        env:
+          BATCH_SIZE: "5"
+        run: .github/scripts/mirror-push.sh "git@gitee.com:liushuo_fe/agent.git"
 
       - name: Mirror to GitCode
-        # SSH 已就绪时即使 Gitee 失败也继续推 GitCode，便于首次空仓全量同步
+        # SSH 就绪后即使 Gitee 失败也继续推 GitCode
         if: steps.setup_ssh.outcome == 'success'
-        run: /tmp/push_with_retry.sh "git@gitcode.com:liushuo_fe/agent.git"
+        env:
+          BATCH_SIZE: "5"
+        run: .github/scripts/mirror-push.sh "git@gitcode.com:liushuo_fe/agent.git"
