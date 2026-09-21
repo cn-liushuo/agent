@@ -1,0 +1,16 @@
+# headroom MCP 服务自带的 Python 虚拟环境（约 617 MB）。
+# 本仓库的 CI 会把 main 镜像推送到 GitHub / Gitee / GitCode，
+# 提交它等于把整个 venv 推到三个平台，务必保持忽略。
+mcp/headroom/.venv/
+
+# Python 字节码与打包产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 本地模型 / 工具缓存
+.cache/
+
+# Cursor 规则目录只是指向 rules/ 的目录联接，本机兼容用，不纳入版本库。
+# 否则 git 在 Windows 上会把联接当真实目录，把 rules/ 里的文件重复收录一份。
+/.cursor/

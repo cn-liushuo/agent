@@ -1,0 +1,45 @@
+---
+description: headroom MCP 服务的调用方式、配置位置与运维要点
+globs: mcp/**
+alwaysApply: false
+---
+
+# headroom 服务约定
+
+安装位置：`D:\code\agent\mcp\headroom`（Python venv，版本 0.37.0）。
+
+## 调用方式
+
+venv 迁移后 `.venv\Scripts\headroom.exe` 启动器内嵌的旧绝对路径已失效，
+统一改用模块入口，或同目录下的 `headroom.cmd` 转发脚本：
+
+```powershell
+& "D:\code\agent\mcp\headroom\.venv\Scripts\python.exe" -m headroom.cli mcp status
+```
+
+## 宿主配置
+
+| 宿主 | 配置文件 | 启动命令 |
+|------|----------|----------|
+| Codex CLI | `C:\Users\DLHJ-LS\.codex\config.toml` → `mcp_servers.headroom` | `python.exe -m headroom.cli mcp serve` |
+| Cursor | `C:\Users\DLHJ-LS\.cursor\mcp.json` | 同上 |
+
+## 代理（可选）
+
+MCP 工具自身即可按需压缩，代理不是必要组件；仅在需要「自动压缩全部流量」时启用：
+
+```powershell
+C:\Users\DLHJ-LS\.headroom\start-proxy.cmd
+```
+
+后台无窗口启动，日志写入 `C:\Users\DLHJ-LS\.headroom\proxy.out.log`。
+代理必须**在沙箱外**启动，沙箱注入的 `HTTP_PROXY` 会导致其启动崩溃。
+
+## 依赖与模型
+
+- `headroom-ai[mcp]` 为工具本体，`headroom-ai[proxy]` 为代理依赖。
+- Kompress 压缩模型缓存在
+  `C:\Users\DLHJ-LS\.cache\huggingface\hub\models--chopratejas--kompress-v2-base`（约 274 MB）。
+  缺失时压缩会静默降级，表现为 `router:noop`（0% 节省）。
+- 密集说明性文字本身压缩率低（约 9%），router 会判为不值得压缩而跳过，
+  这属于设计行为，不是故障。

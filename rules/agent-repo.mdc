@@ -1,0 +1,36 @@
+---
+description: agent 仓库的用途、目录布局、提交红线与路径陷阱
+alwaysApply: true
+---
+
+# agent 仓库约定
+
+本仓库是 agent 自动化资产的集散地，`main` 分支的每次 push 都会由
+`.github/workflows/sync.yml` 镜像推送到 GitHub / Gitee / GitCode 三个远端。
+任何提交都会同时落到三个平台，因此对仓库体积要敏感。
+
+## 目录布局
+
+| 路径 | 内容 |
+|------|------|
+| `mcp/headroom/` | headroom MCP 服务（Python venv） |
+| `skills/` | agent 技能库 |
+| `.github/` | 多平台同步 CI |
+
+`mcp/` 与 `skills/` 于 2026-09-21 分别从 `D:\app\mcp` 和
+`C:\Users\DLHJ-LS\.agents\skills` 迁入。
+
+## 提交红线
+
+- **禁止提交 `mcp/headroom/.venv/`**。它约 617 MB，而本仓库其余全部内容加起来
+  只有约 0.3 MB，一旦提交会被 CI 推到三个远端。该路径已在 `.gitignore` 中。
+- 不要提交模型缓存、运行日志、`__pycache__`。
+- 提交信息沿用仓库既有风格，例如 `fix(ci): ...`、`update: README.md`。
+
+## 路径陷阱
+
+`C:\Users\DLHJ-LS\.agents\skills` 是指向 `D:\code\agent\skills` 的目录联接
+（Junction）。Codex 的用户技能根路径硬编码在 `codex.exe` 内，没有任何配置项
+可以改写，所以这个联接是技能的唯一定位入口，**删除它会导致技能全部失效**。
+
+同理，`mcp/` 下任何被硬编码引用的绝对路径，迁移前都要先反查引用方。
